@@ -2,13 +2,14 @@ use postgres::Error as PostgresError;
 use postgres::{Client, NoTls};
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
+use validator::{ValidateEmail};
 
 #[macro_use]
 extern crate serde_derive;
 
 //TODO: add password with encryption in user as well
-
 //User Model, Struct with id,username,email
+
 #[derive(Serialize, Deserialize)]
 struct User {
     id: Option<i32>,
@@ -98,6 +99,14 @@ fn handle_post_request(request: &str) -> (String, String) {
         Client::connect(&get_db_url(), NoTls),
     ) {
         (Ok(user), Ok(mut client)) => {
+            // Validate the user
+            if false == user.email.validate_email() {
+                return (
+                    INTERNAL_SERVER_ERROR.to_string(),
+                    "Invalid email format".to_string(),
+                );
+            }
+
             client
                 .execute(
                     "INSERT INTO users (username, email) VALUES ($1, $2)",
@@ -165,6 +174,20 @@ fn handle_put_request(request: &str) -> (String, String) {
         Client::connect(&get_db_url(), NoTls),
     ) {
         (Ok(id), Ok(user), Ok(mut client)) => {
+
+             // Validate the user
+             if false == user.email.validate_email() {
+                return (
+                    INTERNAL_SERVER_ERROR.to_string(),
+                    "Invalid email format".to_string(),
+                );
+            }
+            // Check if user exists
+            match client.query_one("SELECT * FROM users WHERE id = $1", &[&id]) {
+                Ok(_) => {}
+                _ => return (NOT_FOUND.to_string(), "User not found".to_string()),
+            }
+
             client
                 .execute(
                     "UPDATE users SET username = $1, email = $2 WHERE id = $3",

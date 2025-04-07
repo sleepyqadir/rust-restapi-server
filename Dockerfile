@@ -1,5 +1,5 @@
 # Build Stage
-From rust:1.70-buster as builder
+From rust:1.86.0-slim-bullseye as builder
 
 WORKDIR /app
 
