@@ -2,19 +2,19 @@ use postgres::Error as PostgresError;
 use postgres::{Client, NoTls};
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
+use std::slice::RSplit;
 use validator::{ValidateEmail};
+use sha2::{Sha256, Digest};
 
 #[macro_use]
 extern crate serde_derive;
-
-//TODO: add password with encryption in user as well
-//User Model, Struct with id,username,email
 
 #[derive(Serialize, Deserialize)]
 struct User {
     id: Option<i32>,
     username: String,
     email: String,
+    password: String,
 }
 
 // CONSTANTS
@@ -58,7 +58,8 @@ fn set_database() -> Result<(), PostgresError> {
         "CREATE TABLE IF NOT EXISTS users (
                 id SERIAL PRIMARY KEY,
                 username VARCHAR NOT NULL,
-                email VARCHAR NOT NULL
+                email VARCHAR NOT NULL,
+                password VARCHAR NOT NULL
             )",
     )?;
     Ok(())
@@ -78,6 +79,7 @@ fn handle_client(mut stream: TcpStream) {
                 r if r.starts_with("GET /users") => handle_get_all_request(r),
                 r if r.starts_with("PUT /users/") => handle_put_request(r),
                 r if r.starts_with("DELETE /users/") => handle_delete_request(r),
+                r if r.starts_with("POST /login") => handle_login_request(r),
                 _ => (NOT_FOUND.to_string(), "404 Not Found".to_string()),
             };
 
@@ -107,16 +109,50 @@ fn handle_post_request(request: &str) -> (String, String) {
                 );
             }
 
+            // Check if user already exists
+            match client.query_one("SELECT * FROM users WHERE email = $1", &[&user.email]) {
+                Ok(_) => return (NOT_FOUND.to_string(), "User already exists".to_string()),
+                _ => {}
+            }
+
+            let password = hash_password(&user.password);
+
+            // Insert the user into the database
             client
                 .execute(
-                    "INSERT INTO users (username, email) VALUES ($1, $2)",
-                    &[&user.username, &user.email],
+                    "INSERT INTO users (username, email, password) VALUES ($1, $2, $3)",
+                    &[&user.username, &user.email, &password],
                 )
                 .unwrap();
 
             return (OK_RESPONSE.to_string(), "User created".to_string());
         }
         _ => return (INTERNAL_SERVER_ERROR.to_string(), "Error".to_string()),
+    }
+}
+
+
+fn handle_login_request(request: &str) -> (String,String) {
+    match (
+        get_user_request_body(request),
+        Client::connect(&get_db_url(), NoTls),
+    ) {
+        (Ok(user), Ok(mut client)) => {
+
+            println!("password: {}", user.password);
+
+            let password = hash_password(&user.password);
+
+            println!("password: {}", password);
+            println!("email: {}", user.email);
+
+            // Check if user exists
+            match client.query_one("SELECT * FROM users WHERE email = $1 AND password = $2", &[&user.email, &password]) {
+                Ok(_) => return (OK_RESPONSE.to_string(), "User logged in".to_string()),
+                _ => return (NOT_FOUND.to_string(), "Invalid login credentials".to_string()),
+            }
+        }
+        _ => return (INTERNAL_SERVER_ERROR.to_string(), "Error while login".to_string()),
     }
 }
 
@@ -132,6 +168,7 @@ fn handle_get_request(request: &str) -> (String, String) {
                         id: row.get(0),
                         username: row.get(1),
                         email: row.get(2),
+                        password: row.get(3)
                     };
                     return (
                         OK_RESPONSE.to_string(),
@@ -155,6 +192,7 @@ fn handle_get_all_request(_request: &str) -> (String, String) {
                     id: row.get(0),
                     username: row.get(1),
                     email: row.get(2),
+                    password: row.get(3)
                 });
             }
 
@@ -239,4 +277,20 @@ fn get_user_request_body(request: &str) -> Result<User, serde_json::Error> {
 
 fn get_db_url() -> String {
     return std::env::var("DATABASE_URL").unwrap();
+}
+
+
+
+
+fn hash_password(password: &str) -> String {
+
+    // Create a Sha256 object
+    let mut hasher = Sha256::new();
+
+    // Write input data
+    hasher.update(password);
+
+    // Read hash digest and convert to a hexadecimal string
+    let result = hasher.finalize();
+    format!("{:x}", result)
 }
